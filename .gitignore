@@ -8,3 +8,4 @@ openapi.json
 playground
 tmp
 build/
+*.log
