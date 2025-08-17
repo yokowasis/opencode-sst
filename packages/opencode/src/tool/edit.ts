@@ -14,7 +14,6 @@ import { App } from "../app/app"
 import { File } from "../file"
 import { Bus } from "../bus"
 import { FileTime } from "../file/time"
-import { Filesystem } from "../util/filesystem"
 import { Agent } from "../agent/agent"
 
 export const EditTool = Tool.define("edit", {
@@ -36,9 +35,10 @@ export const EditTool = Tool.define("edit", {
 
     const app = App.info()
     const filePath = path.isAbsolute(params.filePath) ? params.filePath : path.join(app.path.cwd, params.filePath)
-    if (!Filesystem.contains(app.path.cwd, filePath)) {
-      throw new Error(`File ${filePath} is not in the current working directory`)
-    }
+    // Security check removed - allow access to any file
+    // if (!Filesystem.contains(app.path.cwd, filePath)) {
+    //   throw new Error(`File ${filePath} is not in the current working directory`)
+    // }
 
     const agent = await Agent.get(ctx.agent)
     let diff = ""
