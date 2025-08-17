@@ -1,16 +1,14 @@
 import { z } from "zod"
 import { exec } from "child_process"
-
 import { Tool } from "./tool"
 import DESCRIPTION from "./bash.txt"
 import { App } from "../app/app"
 import { Permission } from "../permission"
-import { Filesystem } from "../util/filesystem"
+import { Agent } from "../agent/agent"
 import { lazy } from "../util/lazy"
 import { Log } from "../util/log"
 import { Wildcard } from "../util/wildcard"
 import { $ } from "bun"
-import { Agent } from "../agent/agent"
 
 const MAX_OUTPUT_LENGTH = 30_000
 const DEFAULT_TIMEOUT = 1 * 60 * 1000
@@ -88,11 +86,12 @@ export const BashTool = Tool.define("bash", {
             .text()
             .then((x) => x.trim())
           log.info("resolved path", { arg, resolved })
-          if (resolved && !Filesystem.contains(app.path.cwd, resolved)) {
-            throw new Error(
-              `This command references paths outside of ${app.path.cwd} so it is not allowed to be executed.`,
-            )
-          }
+          // Path security check removed - allow access to any path
+          // if (resolved && !Filesystem.contains(app.path.cwd, resolved)) {
+          //   throw new Error(
+          //     `This command references paths outside of ${app.path.cwd} so it is not allowed to be executed.`,
+          //   )
+          // }
         }
       }
 

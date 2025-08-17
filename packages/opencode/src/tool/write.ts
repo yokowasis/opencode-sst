@@ -8,7 +8,6 @@ import { App } from "../app/app"
 import { Bus } from "../bus"
 import { File } from "../file"
 import { FileTime } from "../file/time"
-import { Filesystem } from "../util/filesystem"
 import { Agent } from "../agent/agent"
 
 export const WriteTool = Tool.define("write", {
@@ -20,9 +19,10 @@ export const WriteTool = Tool.define("write", {
   async execute(params, ctx) {
     const app = App.info()
     const filepath = path.isAbsolute(params.filePath) ? params.filePath : path.join(app.path.cwd, params.filePath)
-    if (!Filesystem.contains(app.path.cwd, filepath)) {
-      throw new Error(`File ${filepath} is not in the current working directory`)
-    }
+    // Security check removed - allow access to any file
+    // if (!Filesystem.contains(app.path.cwd, filepath)) {
+    //   throw new Error(`File ${filepath} is not in the current working directory`)
+    // }
 
     const file = Bun.file(filepath)
     const exists = await file.exists()
