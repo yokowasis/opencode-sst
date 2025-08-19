@@ -10,3 +10,4 @@ tmp
 build/
 *.log
 tui-binary-embedded
+packages/opencode/.*.bun-build
