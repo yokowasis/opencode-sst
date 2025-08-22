@@ -50,6 +50,15 @@ git rebase upstream/dev
   - For merge: `git commit`
   - For rebase: `git rebase --continue`
 
+When a conflict involves a file that was deleted locally but modified upstream (modify/delete conflict), prefer keeping the local deletion for files such as workflow or CI configs that are intentionally removed in the fork. To accept the local deletion and finish the merge, run:
+
+```bash
+git rm <path-to-file>                # remove upstream-modified file from the index
+git commit                           # finish the merge
+```
+
+(If you instead want to restore the upstream version, add the file and commit.)
+
 ### 6. Push updated dev back to your fork
 
 ```bash
