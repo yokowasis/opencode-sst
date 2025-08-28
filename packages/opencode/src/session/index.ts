@@ -1054,6 +1054,25 @@ export namespace Session {
   export type ShellInput = z.infer<typeof ShellInput>
   export async function shell(input: ShellInput) {
     using abort = lock(input.sessionID)
+    const userMsg: MessageV2.User = {
+      id: Identifier.ascending("message"),
+      sessionID: input.sessionID,
+      time: {
+        created: Date.now(),
+      },
+      role: "user",
+    }
+    await updateMessage(userMsg)
+    const userPart: MessageV2.Part = {
+      type: "text",
+      id: Identifier.ascending("part"),
+      messageID: userMsg.id,
+      sessionID: input.sessionID,
+      text: "The following tool was executed by the user",
+      synthetic: true,
+    }
+    await updatePart(userPart)
+
     const msg: MessageV2.Assistant = {
       id: Identifier.ascending("message"),
       sessionID: input.sessionID,
@@ -1190,13 +1209,21 @@ export namespace Session {
 
   export async function command(input: CommandInput) {
     const command = await Command.get(input.command)
-    const agent = input.agent ?? command.agent ?? "build"
+    const agent = command.agent ?? input.agent ?? "build"
+    const fmtModel = (model: { providerID: string; modelID: string }) => `${model.providerID}/${model.modelID}`
+
     const model =
-      input.model ??
       command.model ??
-      (await Agent.get(agent).then((x) => (x.model ? `${x.model.providerID}/${x.model.modelID}` : undefined))) ??
-      (await Provider.defaultModel().then((x) => `${x.providerID}/${x.modelID}`))
+      (command.agent && (await Agent.get(command.agent).then((x) => (x.model ? fmtModel(x.model) : undefined)))) ??
+      input.model ??
+      (input.agent && (await Agent.get(input.agent).then((x) => (x.model ? fmtModel(x.model) : undefined)))) ??
+      fmtModel(await Provider.defaultModel())
+
     let template = command.template.replace("$ARGUMENTS", input.arguments)
+
+    // intentionally doing match regex doing bash regex replacements
+    // this is because bash commands can output "@" references
+    const fileMatches = template.matchAll(fileRegex)
 
     const bash = Array.from(template.matchAll(bashRegex))
     if (bash.length > 0) {
@@ -1220,10 +1247,9 @@ export namespace Session {
       },
     ] as ChatInput["parts"]
 
-    const matches = template.matchAll(fileRegex)
     const app = App.info()
 
-    for (const match of matches) {
+    for (const match of fileMatches) {
       const file = path.join(app.path.cwd, match[1])
       parts.push({
         type: "file",
