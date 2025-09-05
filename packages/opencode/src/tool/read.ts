@@ -5,7 +5,8 @@ import { Tool } from "./tool"
 import { LSP } from "../lsp"
 import { FileTime } from "../file/time"
 import DESCRIPTION from "./read.txt"
-import { App } from "../app/app"
+import { Filesystem } from "../util/filesystem"
+import { Instance } from "../project/instance"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -22,10 +23,9 @@ export const ReadTool = Tool.define("read", {
     if (!path.isAbsolute(filepath)) {
       filepath = path.join(process.cwd(), filepath)
     }
-    // Security check removed - allow access to any file
-    // if (!ctx.extra?.["bypassCwdCheck"] && !Filesystem.contains(app.path.cwd, filepath)) {
-    //   throw new Error(`File ${filepath} is not in the current working directory`)
-    // }
+    if (!ctx.extra?.["bypassCwdCheck"] && !Filesystem.contains(Instance.directory, filepath)) {
+      throw new Error(`File ${filepath} is not in the current working directory`)
+    }
 
     const file = Bun.file(filepath)
     if (!(await file.exists())) {
@@ -76,7 +76,7 @@ export const ReadTool = Tool.define("read", {
     FileTime.read(ctx.sessionID, filepath)
 
     return {
-      title: path.relative(App.info().path.root, filepath),
+      title: path.relative(Instance.worktree, filepath),
       output,
       metadata: {
         preview,
