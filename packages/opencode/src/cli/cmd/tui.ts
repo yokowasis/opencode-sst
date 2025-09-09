@@ -73,7 +73,21 @@ export const TuiCommand = cmd({
       }),
   handler: async (args) => {
     while (true) {
-      const cwd = args.project ? path.resolve(args.project) : process.cwd()
+      // Fix: Don't use args.project if it looks like a binary path or is the executable path
+      let projectPath = args.project
+      if (projectPath) {
+        // If the project path is the same as the executable path or looks like a binary, ignore it
+        const execPath = path.resolve(process.execPath)
+        const resolvedProject = path.resolve(projectPath)
+        if (
+          resolvedProject === execPath ||
+          (projectPath.includes("opencode") && (projectPath.includes("bin") || projectPath.includes("fallback")))
+        ) {
+          projectPath = undefined
+        }
+      }
+
+      const cwd = projectPath ? path.resolve(projectPath) : process.cwd()
       try {
         process.chdir(cwd)
       } catch (e) {
