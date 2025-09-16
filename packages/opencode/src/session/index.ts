@@ -1,6 +1,9 @@
 import { Decimal } from "decimal.js"
 import z from "zod/v4"
+import { extendZodWithOpenApi } from "zod-openapi"
 import { type LanguageModelUsage, type ProviderMetadata } from "ai"
+
+extendZodWithOpenApi(z)
 
 import PROMPT_INITIALIZE from "../session/prompt/initialize.txt"
 
