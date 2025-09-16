@@ -1,73 +1,32 @@
-import os from "os"
-import path from "path"
-import fs from "fs/promises"
-import { spawn } from "child_process"
 import { Decimal } from "decimal.js"
-import { z, ZodSchema } from "zod"
-import {
-  generateText,
-  LoadAPIKeyError,
-  streamText,
-  tool,
-  wrapLanguageModel,
-  type Tool as AITool,
-  type LanguageModelUsage,
-  type ProviderMetadata,
-  type ModelMessage,
-  type StreamTextResult,
-} from "ai"
+import z from "zod/v4"
+import { type LanguageModelUsage, type ProviderMetadata } from "ai"
 
 import PROMPT_INITIALIZE from "../session/prompt/initialize.txt"
-import PROMPT_PLAN from "../session/prompt/plan.txt"
-import BUILD_SWITCH from "../session/prompt/build-switch.txt"
 
 import { Bus } from "../bus"
 import { Config } from "../config/config"
 import { Flag } from "../flag/flag"
 import { Identifier } from "../id/id"
 import { Installation } from "../installation"
-import { MCP } from "../mcp"
-import { Provider } from "../provider/provider"
-import { ProviderTransform } from "../provider/transform"
 import type { ModelsDev } from "../provider/models"
 import { Share } from "../share/share"
-import { Snapshot } from "../snapshot"
 import { Storage } from "../storage/storage"
 import { Log } from "../util/log"
-import { NamedError } from "../util/error"
-import { SystemPrompt } from "./system"
-import { FileTime } from "../file/time"
 import { MessageV2 } from "./message-v2"
-import { LSP } from "../lsp"
-import { ReadTool } from "../tool/read"
-import { mergeDeep, pipe, splitWhen } from "remeda"
-import { ToolRegistry } from "../tool/registry"
-import { Plugin } from "../plugin"
 import { Project } from "../project/project"
 import { Instance } from "../project/instance"
-import { Agent } from "../agent/agent"
-import { Permission } from "../permission"
-import { Wildcard } from "../util/wildcard"
-import { ulid } from "ulid"
-import { defer } from "../util/defer"
-import { Command } from "../command"
-import { $ } from "bun"
-import { ListTool } from "../tool/ls"
+import { Token } from "../util/token"
+import { SessionPrompt } from "./prompt"
 
 export namespace Session {
   const log = Log.create({ service: "session" })
-
-  const OUTPUT_TOKEN_MAX = 32_000
 
   const parentSessionTitlePrefix = "New session - "
   const childSessionTitlePrefix = "Child session - "
 
   function createDefaultTitle(isChild = false) {
     return (isChild ? childSessionTitlePrefix : parentSessionTitlePrefix) + new Date().toISOString()
-  }
-
-  function isDefaultTitle(title: string) {
-    return title.startsWith(parentSessionTitlePrefix)
   }
 
   export const Info = z
@@ -97,7 +56,7 @@ export namespace Session {
         })
         .optional(),
     })
-    .openapi({
+    .meta({
       ref: "Session",
     })
   export type Info = z.output<typeof Info>
@@ -107,7 +66,7 @@ export namespace Session {
       secret: z.string(),
       url: z.string(),
     })
-    .openapi({
+    .meta({
       ref: "SessionShare",
     })
   export type ShareInfo = z.output<typeof ShareInfo>
@@ -125,12 +84,6 @@ export namespace Session {
         info: Info,
       }),
     ),
-    Idle: Bus.event(
-      "session.idle",
-      z.object({
-        sessionID: z.string(),
-      }),
-    ),
     Error: Bus.event(
       "session.error",
       z.object({
@@ -138,45 +91,19 @@ export namespace Session {
         error: MessageV2.Assistant.shape.error,
       }),
     ),
-    Compacted: Bus.event(
-      "session.compacted",
-      z.object({
-        sessionID: z.string(),
-      }),
-    ),
   }
-
-  const state = Instance.state(
-    () => {
-      const pending = new Map<string, AbortController>()
-      const queued = new Map<
-        string,
-        {
-          input: ChatInput
-          message: MessageV2.User
-          parts: MessageV2.Part[]
-          processed: boolean
-          callback: (input: { info: MessageV2.Assistant; parts: MessageV2.Part[] }) => void
-        }[]
-      >()
-
-      return {
-        pending,
-        queued,
-      }
-    },
-    async (state) => {
-      for (const [_, controller] of state.pending) {
-        controller.abort()
-      }
-    },
-  )
 
   export async function create(parentID?: string, title?: string) {
     return createNext({
       parentID,
       directory: Instance.directory,
       title,
+    })
+  }
+
+  export async function touch(sessionID: string) {
+    await update(sessionID, (draft) => {
+      draft.time.updated = Date.now()
     })
   }
 
@@ -269,10 +196,7 @@ export namespace Session {
   }
 
   export async function messages(sessionID: string) {
-    const result = [] as {
-      info: MessageV2.Info
-      parts: MessageV2.Part[]
-    }[]
+    const result = [] as MessageV2.WithParts[]
     for (const p of await Storage.list(["message", sessionID])) {
       const read = await Storage.read<MessageV2.Info>(p)
       result.push({
@@ -319,21 +243,9 @@ export namespace Session {
     return result
   }
 
-  export function abort(sessionID: string) {
-    const controller = state().pending.get(sessionID)
-    if (!controller) return false
-    log.info("aborting", {
-      sessionID,
-    })
-    controller.abort()
-    state().pending.delete(sessionID)
-    return true
-  }
-
   export async function remove(sessionID: string, emitEvent = true) {
     const project = Instance.project
     try {
-      abort(sessionID)
       const session = await get(sessionID)
       for (const child of await children(sessionID)) {
         await remove(child.id, false)
@@ -356,14 +268,24 @@ export namespace Session {
     }
   }
 
-  async function updateMessage(msg: MessageV2.Info) {
+  export async function updateMessage(msg: MessageV2.Info) {
     await Storage.write(["message", msg.sessionID, msg.id], msg)
     Bus.publish(MessageV2.Event.Updated, {
       info: msg,
     })
+    return msg
   }
 
-  async function updatePart(part: MessageV2.Part) {
+  export async function removeMessage(sessionID: string, messageID: string) {
+    await Storage.remove(["message", sessionID, messageID])
+    Bus.publish(MessageV2.Event.Removed, {
+      sessionID,
+      messageID,
+    })
+    return messageID
+  }
+
+  export async function updatePart(part: MessageV2.Part) {
     await Storage.write(["part", part.messageID, part.id], part)
     Bus.publish(MessageV2.Event.PartUpdated, {
       part,
@@ -1804,109 +1726,30 @@ export namespace Session {
       })
     })
     const msgs = await messages(input.sessionID)
-    const start = Math.max(
-      0,
-      msgs.findLastIndex((msg) => msg.info.role === "assistant" && msg.info.summary === true),
-    )
-    const split = start + Math.floor((msgs.length - start) / 2)
-    log.info("summarizing", { start, split })
-    const toSummarize = msgs.slice(start, split)
-    const model = await Provider.getModel(input.providerID, input.modelID)
-    const system = [
-      ...SystemPrompt.summarize(model.providerID),
-      ...(await SystemPrompt.environment()),
-      ...(await SystemPrompt.custom()),
-    ]
-
-    const generated = await generateText({
-      maxRetries: 10,
-      model: model.language,
-      messages: [
-        ...system.map(
-          (x): ModelMessage => ({
-            role: "system",
-            content: x,
-          }),
-        ),
-        ...MessageV2.toModelMessage(toSummarize),
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Provide a detailed but concise summary of our conversation above. Focus on information that would be helpful for continuing the conversation, including what we did, what we're doing, which files we're working on, and what we're going to do next.",
-            },
-          ],
-        },
-      ],
-    })
-    const usage = getUsage(model.info, generated.usage, generated.providerMetadata)
-    const msg: MessageV2.Info = {
-      id: Identifier.create("message", false, toSummarize.at(-1)!.info.time.created + 1),
-      role: "assistant",
-      sessionID: input.sessionID,
-      system,
-      mode: "build",
-      path: {
-        cwd: Instance.directory,
-        root: Instance.worktree,
-      },
-      summary: true,
-      cost: usage.cost,
-      tokens: usage.tokens,
-      modelID: input.modelID,
-      providerID: model.providerID,
-      time: {
-        created: Date.now(),
-        completed: Date.now(),
-      },
-    }
-    await updateMessage(msg)
-    await updatePart({
-      type: "text",
-      sessionID: input.sessionID,
-      messageID: msg.id,
-      id: Identifier.ascending("part"),
-      text: generated.text,
-      time: {
-        start: Date.now(),
-        end: Date.now(),
-      },
-    })
-
-    Bus.publish(Event.Compacted, {
-      sessionID: input.sessionID,
-    })
-
-    return msg
-  }
-
-  function isLocked(sessionID: string) {
-    return state().pending.has(sessionID)
-  }
-
-  function lock(sessionID: string) {
-    log.info("locking", { sessionID })
-    if (state().pending.has(sessionID)) throw new BusyError(sessionID)
-    const controller = new AbortController()
-    state().pending.set(sessionID, controller)
-    return {
-      signal: controller.signal,
-      async [Symbol.dispose]() {
-        log.info("unlocking", { sessionID })
-        state().pending.delete(sessionID)
-
-        const session = await get(sessionID)
-        if (session.parentID) return
-
-        Bus.publish(Event.Idle, {
-          sessionID,
-        })
-      },
+    let sum = 0
+    for (let msgIndex = msgs.length - 2; msgIndex >= 0; msgIndex--) {
+      const msg = msgs[msgIndex]
+      if (msg.info.role === "assistant" && msg.info.summary) return
+      for (let partIndex = msg.parts.length - 1; partIndex >= 0; partIndex--) {
+        const part = msg.parts[partIndex]
+        if (part.type === "tool")
+          if (part.state.status === "completed") {
+            if (part.state.time.compacted) return
+            sum += Token.estimate(part.state.output)
+            if (sum > 40_000) {
+              log.info("pruning", {
+                sum,
+                id: part.id,
+              })
+              part.state.time.compacted = Date.now()
+              await updatePart(part)
+            }
+          }
+      }
     }
   }
 
-  function getUsage(model: ModelsDev.Model, usage: LanguageModelUsage, metadata?: ProviderMetadata) {
+  export function getUsage(model: ModelsDev.Model, usage: LanguageModelUsage, metadata?: ProviderMetadata) {
     const tokens = {
       input: usage.inputTokens ?? 0,
       output: usage.outputTokens ?? 0,
@@ -1942,7 +1785,7 @@ export namespace Session {
     providerID: string
     messageID: string
   }) {
-    await Session.prompt({
+    await SessionPrompt.prompt({
       sessionID: input.sessionID,
       messageID: input.messageID,
       model: {
