@@ -538,7 +538,6 @@ export async function handler(
     async function reload() {
       if (!apiKey) return
 
-      // acquire reload lock
       const lock = await Database.use((tx) =>
         tx
           .update(BillingTable)
@@ -548,6 +547,7 @@ export async function handler(
           .where(
             and(
               eq(BillingTable.workspaceID, apiKey.workspaceID),
+              eq(BillingTable.reload, true),
               lt(BillingTable.balance, centsToMicroCents(Billing.CHARGE_THRESHOLD)),
               or(isNull(BillingTable.timeReloadLockedTill), lt(BillingTable.timeReloadLockedTill, sql`now()`)),
             ),

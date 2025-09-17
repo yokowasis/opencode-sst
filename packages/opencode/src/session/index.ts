@@ -19,7 +19,6 @@ import { Log } from "../util/log"
 import { MessageV2 } from "./message-v2"
 import { Project } from "../project/project"
 import { Instance } from "../project/instance"
-import { Token } from "../util/token"
 import { SessionPrompt } from "./prompt"
 
 export namespace Session {
